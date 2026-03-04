@@ -1,5 +1,5 @@
 import os
-import yfinance as yf
+from datetime import datetime, timedelta
 import statsmodels.api as sm
 import alpaca_trade_api as tradeapi
 from dotenv import load_dotenv
@@ -13,11 +13,21 @@ api = tradeapi.REST(
     api_version='v2'
 )
 
-# 2. Fetch Latest Market Data (Using 1 Year to establish the baseline)
+# 2. Fetch Latest Market Data (Using Alpaca instead of yfinance)
 tickers = ['GS', 'MS']
-print(f"Analyzing Live Spread for {tickers[0]} and {tickers[1]}...\n")
+print(f"Fetching 1 year of live data for {tickers[0]} and {tickers[1]} via Alpaca...\n")
 
-data = yf.download(tickers, period="1y")['Close'].dropna()
+# Calculate dates (365 days ago to today)
+end_date = datetime.now()
+start_date = end_date - timedelta(days=365)
+start_str = start_date.strftime('%Y-%m-%d') # Format for Alpaca API
+
+# Pull the daily bars from Alpaca
+bars = api.get_bars(tickers, tradeapi.rest.TimeFrame.Day, start=start_str).df
+
+# Alpaca stacks all the data into rows with a 'symbol' column. 
+# We use .pivot() to reshape it into clean columns for 'GS' and 'MS' closing prices.
+data = bars.pivot(columns='symbol', values='close').dropna()
 
 # 3. Calculate Live Z-Score
 y = data['GS']
@@ -40,21 +50,18 @@ print("--- TRADING ACTION ---")
 try:
     if current_z < -2.0:
         print("Signal: BUY THE SPREAD (Rubber band stretched down)")
-        # Buy GS, Short MS
         api.submit_order(symbol='GS', qty=10, side='buy', type='market', time_in_force='gtc')
         api.submit_order(symbol='MS', qty=10, side='sell', type='market', time_in_force='gtc')
         print("Orders Submitted: Bought 10 GS, Shorted 10 MS.")
 
     elif current_z > 2.0:
         print("Signal: SHORT THE SPREAD (Rubber band stretched up)")
-        # Short GS, Buy MS
         api.submit_order(symbol='GS', qty=10, side='sell', type='market', time_in_force='gtc')
         api.submit_order(symbol='MS', qty=10, side='buy', type='market', time_in_force='gtc')
         print("Orders Submitted: Shorted 10 GS, Bought 10 MS.")
 
     elif abs(current_z) < 0.5:
         print("Signal: TAKE PROFIT (Rubber band returned to normal)")
-        # Close all positions
         api.close_all_positions()
         print("Orders Submitted: Closed all open positions.")
 
